@@ -23,7 +23,7 @@ from collections import defaultdict
 import uuid
 
 # === Configuration ===
-API_URL = "http://103.102.234.6:11434/api/generate"
+API_URL = "http://localhost:11434/api/generate"
 OUTPUT_DIR = "output_files"
 CACHE_DIR = "cache"
 LOG_DIR = "logs"
