@@ -1,0 +1,13 @@
+websockets
+Flask
+onnx_asr[cpu,hub]
+soundfile
+webrtcvad
+silero-vad
+aiohttp
+torch
+requests
+torchaudio
+soundfile
+json_repair
+onnxruntime

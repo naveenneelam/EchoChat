@@ -1,0 +1,26 @@
+version: "3.9"
+
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8765:8765"   
+    environment:
+      - stt-network
+    networks:
+      - stt-network
+    volumes:
+      - ./output_files:/app/output_files
+      - ./notes:/app/notes      
+  frontend:
+    build: ./frontend
+    ports:
+      - "81:80"
+    depends_on:
+      - backend
+    networks:
+      - stt-network
+
+networks:
+  stt-network:
+    driver: bridge

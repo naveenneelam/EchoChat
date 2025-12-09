@@ -1,0 +1,7 @@
+{
+  "name": "Silero VAD & Whisper Stream",
+  "description": "Real-time voice activity detection and speech-to-text application using WebSocket streaming.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
