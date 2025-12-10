@@ -11,23 +11,24 @@ import {
   MessageSquare,
   AlertCircle,
   Waves,
-  BarChart2
+  BarChart2,
+  Loader2
 } from 'lucide-react';
 import Visualizer from './components/Visualizer';
 import SettingsModal from './components/SettingsModal';
-import { AppConfig, ConnectionStatus, TranscriptMessage, Theme } from './types';
+import { AppConfig, ConnectionStatus, TranscriptMessage, Theme, ProcessStatus } from './types';
 import { floatTo16BitPCM, calculateRMS, downsampleBuffer } from './utils/audioUtils';
 
 // Helper to determine default protocol
 // Defaulting to ws:// as requested for local insecure dev environments
 const getInitialUrl = () => {
-  const defaultAddr = 'localhost:8765';
+  const defaultAddr = '103.102.234.6:8765';
   return `ws://${defaultAddr}`;
 };
 
 // Constants matching the provided reference logic
 const DEFAULT_CONFIG: AppConfig = {
-  wsUrl: getInitialUrl(), 
+  wsUrl: getInitialUrl(),
   sampleRate: 16000,
   frameDurationMs: 32,
   pauseThreshold: 500, // 500ms pause to consider end of utterance
@@ -44,12 +45,12 @@ function App() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [config, setConfig] = useState<AppConfig>(DEFAULT_CONFIG);
   const [transcripts, setTranscripts] = useState<TranscriptMessage[]>([]);
+  const [processStatus, setProcessStatus] = useState<ProcessStatus>('idle');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [vadActive, setVadActive] = useState(false);
-  
+
   // Visualization State
   const [vizMode, setVizMode] = useState<'frequency' | 'waveform'>('frequency');
-  // NOTE: vizData state removed for performance. Visualizer now reads directly from AnalyserNode.
 
   // --- Refs ---
   const wsRef = useRef<WebSocket | null>(null);
@@ -60,7 +61,7 @@ function App() {
   const audioQueueRef = useRef<number[]>([]);
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
   const transcriptsEndRef = useRef<HTMLDivElement>(null);
-  
+
   // Keep track of current viz mode in ref for the audio process loop to avoid stale closures
   const vizModeRef = useRef<'frequency' | 'waveform'>('frequency');
   useEffect(() => { vizModeRef.current = vizMode; }, [vizMode]);
@@ -86,46 +87,100 @@ function App() {
 
   const speak = (text: string) => {
     if (!utteranceRef.current) return;
-    
+
     // Cancel any current speaking to avoid queue buildup
     window.speechSynthesis.cancel();
-    
+
     utteranceRef.current.text = text;
     window.speechSynthesis.speak(utteranceRef.current);
   };
 
   // --- WebSocket Handling ---
   const handleWebSocketMessage = useCallback((event: MessageEvent) => {
-    const message = event.data;
-    setTranscripts(prev => [...prev, {
-          id: Date.now().toString(),
-          text: message,
-          sender: 'system',
-          timestamp: Date.now(),
-          isFinal: true
-        }]);
-    if (typeof message === 'string') {      
-      if (message.startsWith('VOICE FEEDBACK:')) {
-        const text = message.replace('VOICE FEEDBACK:', '').trim();
-        speak(text);
-        // Add to transcript as system
-        setTranscripts(prev => [...prev, {
-          id: Date.now().toString(),
-          text: text,
-          sender: 'system',
-          timestamp: Date.now(),
-          isFinal: true
-        }]);
-      } else if (message.startsWith('TRANSCRIPTION:')) {
-        const text = message.replace('TRANSCRIPTION:', '').trim();
-        // Add to transcript as user
-        setTranscripts(prev => [...prev, {
-          id: Date.now().toString(),
-          text: text,
-          sender: 'user',
-          timestamp: Date.now(),
-          isFinal: true
-        }]);
+    const rawData = event.data;
+
+    try {
+      // Parse JSON messages
+      const data = JSON.parse(rawData);
+
+      switch (data.type) {
+        case 'CONNECTED':
+          console.log("Server Handshake Received:", data);
+          setStatus(ConnectionStatus.CONNECTED);
+          setProcessStatus('idle');
+          break;
+
+        case 'TRANSCRIPTION_STARTED':
+          setProcessStatus('transcribing');
+          break;
+
+        case 'TRANSCRIPTION_COMPLETED':
+        case 'TRANSCRIPTION': // Fallback for legacy backend
+          const userText = data.text?.trim();
+          if (userText) {
+            setTranscripts(prev => [...prev, {
+              id: (data.session_id || '') + Date.now().toString(),
+              text: userText,
+              sender: 'user',
+              timestamp: data.timestamp ? data.timestamp * 1000 : Date.now(),
+              isFinal: true
+            }]);
+          }
+          // Reset to idle, or wait for processing started if backend sends it immediately
+          setProcessStatus('idle');
+          break;
+
+        case 'PROCESSING_STARTED':
+          setProcessStatus('processing');
+          break;
+
+        case 'PROCESSING_COMPLETED':
+        case 'SYSTEM_RESPONSE': // Fallback
+        case 'VOICE_FEEDBACK': // Fallback
+          const systemText = (data.text || data.message || '').trim();
+          if (systemText) {
+            speak(systemText);
+            setTranscripts(prev => [...prev, {
+              id: Date.now().toString(),
+              text: systemText,
+              sender: 'system',
+              timestamp: Date.now(),
+              isFinal: true
+            }]);
+          }
+          setProcessStatus('idle');
+          break;
+
+        default:
+          console.log("Received unknown message type:", data.type);
+          break;
+      }
+
+    } catch (e) {
+      // --- Fallback: Legacy Plain Text Protocol ---
+      if (typeof rawData === 'string') {
+        if (rawData.startsWith('VOICE FEEDBACK:')) {
+          const text = rawData.replace('VOICE FEEDBACK:', '').trim();
+          speak(text);
+          setTranscripts(prev => [...prev, {
+            id: Date.now().toString(),
+            text: text,
+            sender: 'system',
+            timestamp: Date.now(),
+            isFinal: true
+          }]);
+          setProcessStatus('idle');
+        } else if (rawData.startsWith('TRANSCRIPTION:')) {
+          const text = rawData.replace('TRANSCRIPTION:', '').trim();
+          setTranscripts(prev => [...prev, {
+            id: Date.now().toString(),
+            text: text,
+            sender: 'user',
+            timestamp: Date.now(),
+            isFinal: true
+          }]);
+          setProcessStatus('idle');
+        }
       }
     }
   }, []);
@@ -146,6 +201,7 @@ function App() {
     }
     audioQueueRef.current = [];
     setVadActive(false);
+    setProcessStatus('idle');
   };
 
   const cleanupWS = () => {
@@ -165,6 +221,7 @@ function App() {
     setErrorMessage(null);
     try {
       setStatus(ConnectionStatus.CONNECTING);
+      setProcessStatus('idle');
 
       // 1. Browser Capability Check
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -178,8 +235,6 @@ function App() {
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
-          // We don't force sampleRate here because many browsers/devices don't support 16000 hardware rate.
-          // We handle downsampling manually.
         }
       });
       streamRef.current = stream;
@@ -191,7 +246,7 @@ function App() {
 
       const source = ctx.createMediaStreamSource(stream);
       const inputSampleRate = ctx.sampleRate;
-      
+
       console.log(`Audio Context initialized at ${inputSampleRate}Hz. Target is ${TARGET_SAMPLE_RATE}Hz`);
 
       // Analyser for Visualization
@@ -215,11 +270,11 @@ function App() {
         // PCM Streaming Logic
         if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
           const inputData = e.inputBuffer.getChannelData(0);
-          
+
           // Simple Client-Side VAD for Visualization (Badge only)
           const rms = calculateRMS(inputData);
           const isSpeech = rms > config.silenceThreshold;
-          
+
           // Only update React state if it changes to avoid thrashing
           setVadActive(prev => (prev !== isSpeech ? isSpeech : prev));
 
@@ -238,9 +293,9 @@ function App() {
           while (audioQueueRef.current.length >= VAD_SAMPLES_PER_FRAME) {
             const frame = audioQueueRef.current.slice(0, VAD_SAMPLES_PER_FRAME);
             audioQueueRef.current = audioQueueRef.current.slice(VAD_SAMPLES_PER_FRAME);
-            
+
             const pcmBuffer = floatTo16BitPCM(new Float32Array(frame));
-            
+
             try {
                 wsRef.current.send(pcmBuffer);
             } catch(err) {
@@ -257,27 +312,27 @@ function App() {
       // 4. Connect WebSocket
       const connectionUrl = config.wsUrl;
       console.log("Connecting to WebSocket:", connectionUrl);
-      
+
       const ws = new WebSocket(connectionUrl);
       ws.binaryType = 'arraybuffer';
 
       ws.onopen = () => {
         console.log("WebSocket connected");
-        setStatus(ConnectionStatus.CONNECTED);
+        // Status will be set to CONNECTED when 'CONNECTED' message is received
       };
 
       ws.onmessage = handleWebSocketMessage;
-      
+
       ws.onerror = (error) => {
         console.error("WS Error", error);
         setStatus(ConnectionStatus.ERROR);
-        
+
         // Try to derive a helpful message
         let msg = "Connection failed. Check server status and URL.";
         if (window.location.protocol === 'https:' && connectionUrl.startsWith('ws://')) {
           msg += " (Note: Browsers often block insecure ws:// from https:// pages)";
         }
-        
+
         if (!errorMessage) {
             setErrorMessage(msg);
         }
@@ -296,7 +351,7 @@ function App() {
     } catch (err: any) {
       console.error("Setup Error", err);
       setStatus(ConnectionStatus.ERROR);
-      
+
       // Formatting the error message nicely
       let msg = err.message || "Unknown error occurred during setup";
       if (err.name === 'NotAllowedError') {
@@ -304,7 +359,7 @@ function App() {
       } else if (err.name === 'NotFoundError') {
         msg = "No microphone found.";
       }
-      
+
       setErrorMessage(msg);
     }
   };
@@ -324,11 +379,11 @@ function App() {
   // Scroll to bottom of transcript
   useEffect(() => {
     transcriptsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [transcripts]);
+  }, [transcripts, processStatus]);
 
   return (
     <div className={`min-h-screen flex flex-col ${theme === 'dark' ? 'bg-dark-950 text-white' : 'bg-gray-50 text-gray-900'}`}>
-      
+
       {/* HEADER */}
       <header className="px-6 py-4 flex items-center justify-between border-b border-gray-200 dark:border-dark-800 bg-white/50 dark:bg-dark-900/50 backdrop-blur-md sticky top-0 z-10">
         <div className="flex items-center gap-3">
@@ -340,11 +395,11 @@ function App() {
             <p className="text-xs text-gray-500 dark:text-gray-400">Real-time ASR Stream</p>
           </div>
         </div>
-        
+
         <div className="flex items-center gap-3">
           <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium border ${
-            status === ConnectionStatus.CONNECTED 
-              ? 'bg-green-100 text-green-700 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800' 
+            status === ConnectionStatus.CONNECTED
+              ? 'bg-green-100 text-green-700 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800'
               : status === ConnectionStatus.CONNECTING
               ? 'bg-yellow-100 text-yellow-700 border-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-400 dark:border-yellow-800'
               : status === ConnectionStatus.ERROR
@@ -355,7 +410,7 @@ function App() {
             <span className="uppercase tracking-wider">{status}</span>
           </div>
 
-          <button 
+          <button
             onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
             className="p-2 rounded-lg hover:bg-gray-200 dark:hover:bg-dark-800 transition-colors"
           >
@@ -366,10 +421,10 @@ function App() {
 
       {/* MAIN CONTENT */}
       <main className="flex-1 max-w-5xl w-full mx-auto p-4 md:p-6 grid grid-cols-1 md:grid-cols-2 gap-6">
-        
+
         {/* LEFT COLUMN: Visuals & Controls */}
         <div className="flex flex-col gap-6">
-          
+
           {/* Visualizer Card */}
           <div className="flex-1 bg-white dark:bg-dark-900 rounded-2xl p-8 shadow-sm border border-gray-200 dark:border-dark-800 flex flex-col items-center justify-center relative overflow-hidden group">
              {/* Info overlay */}
@@ -381,7 +436,7 @@ function App() {
 
             {/* Viz Toggle */}
             <div className="absolute top-4 right-4 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
-                <button 
+                <button
                     onClick={toggleVizMode}
                     className="p-2 rounded-lg bg-gray-100 dark:bg-dark-800 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-dark-700 transition-colors"
                     title={`Switch to ${vizMode === 'frequency' ? 'Waveform' : 'Frequency'} view`}
@@ -390,15 +445,15 @@ function App() {
                 </button>
             </div>
 
-            <Visualizer 
-              isRecording={status === ConnectionStatus.CONNECTED} 
+            <Visualizer
+              isRecording={status === ConnectionStatus.CONNECTED}
               analyser={analyserRef.current}
               vadActive={vadActive}
               mode={vizMode}
             />
-            
+
             <p className="mt-6 text-center text-sm text-gray-500 dark:text-gray-400 max-w-xs">
-              {status === ConnectionStatus.CONNECTED 
+              {status === ConnectionStatus.CONNECTED
                 ? "Listening... Speak now. Pausing will trigger processing."
                 : "Ready to connect. Ensure your Python backend is running."}
             </p>
@@ -433,8 +488,8 @@ function App() {
                 <button
                 onClick={toggleRecording}
                 className={`relative group px-8 py-4 rounded-2xl flex items-center gap-3 font-bold text-lg transition-all transform active:scale-95 shadow-lg ${
-                    status === ConnectionStatus.CONNECTED 
-                    ? 'bg-red-500 hover:bg-red-600 text-white shadow-red-500/30' 
+                    status === ConnectionStatus.CONNECTED
+                    ? 'bg-red-500 hover:bg-red-600 text-white shadow-red-500/30'
                     : 'bg-primary-600 hover:bg-primary-500 text-white shadow-primary-500/30'
                 }`}
                 >
@@ -450,7 +505,7 @@ function App() {
                     </>
                 )}
                 </button>
-                
+
                 <div className="w-12"></div> {/* Spacer for symmetry */}
             </div>
           </div>
@@ -462,22 +517,22 @@ function App() {
             <MessageSquare size={18} className="text-primary-500" />
             <h2 className="font-semibold">Live Transcript</h2>
           </div>
-          
+
           <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50/50 dark:bg-dark-950/50">
-            {transcripts.length === 0 && (
+            {transcripts.length === 0 && processStatus === 'idle' && (
               <div className="h-full flex flex-col items-center justify-center text-gray-400 dark:text-gray-600 opacity-60">
                 <p>No speech detected yet.</p>
               </div>
             )}
-            
+
             {transcripts.map((msg) => (
-              <div 
-                key={msg.id} 
+              <div
+                key={msg.id}
                 className={`flex w-full ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}
               >
                 <div className={`max-w-[80%] px-4 py-3 rounded-2xl shadow-sm ${
-                  msg.sender === 'user' 
-                    ? 'bg-primary-600 text-white rounded-tr-sm' 
+                  msg.sender === 'user'
+                    ? 'bg-primary-600 text-white rounded-tr-sm'
                     : 'bg-white dark:bg-dark-800 border border-gray-100 dark:border-dark-700 text-gray-800 dark:text-gray-100 rounded-tl-sm'
                 }`}>
                   <p className="text-sm leading-relaxed">{msg.text}</p>
@@ -487,17 +542,41 @@ function App() {
                 </div>
               </div>
             ))}
+
+            {/* Visual Indicators for Process Status */}
+            {processStatus === 'transcribing' && (
+              <div className="flex w-full justify-end animate-in fade-in slide-in-from-bottom-2">
+                <div className="max-w-[80%] px-4 py-3 rounded-2xl rounded-tr-sm bg-primary-50 dark:bg-primary-900/20 text-primary-600 dark:text-primary-400 border border-primary-100 dark:border-primary-800/50 flex items-center gap-3">
+                   <div className="flex gap-1">
+                      <span className="w-1.5 h-1.5 bg-primary-500 dark:bg-primary-400 rounded-full animate-bounce [animation-delay:-0.3s]"></span>
+                      <span className="w-1.5 h-1.5 bg-primary-500 dark:bg-primary-400 rounded-full animate-bounce [animation-delay:-0.15s]"></span>
+                      <span className="w-1.5 h-1.5 bg-primary-500 dark:bg-primary-400 rounded-full animate-bounce"></span>
+                   </div>
+                   <span className="text-sm font-medium">Transcribing...</span>
+                </div>
+              </div>
+            )}
+
+            {processStatus === 'processing' && (
+              <div className="flex w-full justify-start animate-in fade-in slide-in-from-bottom-2">
+                <div className="max-w-[80%] px-4 py-3 rounded-2xl rounded-tl-sm bg-gray-100 dark:bg-dark-800 text-gray-500 dark:text-gray-400 flex items-center gap-2">
+                   <Loader2 className="w-4 h-4 animate-spin" />
+                   <span className="text-sm font-medium">AI Thinking...</span>
+                </div>
+              </div>
+            )}
+
             <div ref={transcriptsEndRef} />
           </div>
         </div>
 
       </main>
 
-      <SettingsModal 
-        isOpen={isSettingsOpen} 
-        onClose={() => setIsSettingsOpen(false)} 
-        config={config} 
-        onSave={setConfig} 
+      <SettingsModal
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        config={config}
+        onSave={setConfig}
       />
     </div>
   );

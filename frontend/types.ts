@@ -21,4 +21,6 @@ export enum ConnectionStatus {
   ERROR = 'error',
 }
 
+export type ProcessStatus = 'idle' | 'transcribing' | 'processing';
+
 export type Theme = 'light' | 'dark';
