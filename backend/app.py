@@ -54,7 +54,7 @@ class SessionData:
     transcriptions: List[str] = None
     last_activity: float = None
     processing_task: Optional[asyncio.Task] = None
-    
+
     def __post_init__(self):
         if self.audio_buffer is None:
             self.audio_buffer = bytearray()
@@ -104,15 +104,15 @@ def run_flask():
 async def load_models():
     """Async model loading"""
     global MODEL, VAD_MODEL
-    
+
     try:
         logger.info("Loading ASR model...")
         MODEL = onnx_asr.load_model("nemo-parakeet-tdt-0.6b-v3")
         logger.info("ASR model loaded successfully")
-        
+
         logger.info("Loading Silero VAD model...")
         torch.backends.nnpack.enabled = False
-        
+
         VAD_MODEL, _ = torch.hub.load(
             repo_or_dir='snakers4/silero-vad',
             model='silero_vad',
@@ -121,7 +121,7 @@ async def load_models():
         )
         VAD_MODEL.eval()
         logger.info("Silero VAD model loaded successfully")
-        
+
     except Exception as e:
         logger.error(f"Error loading models: {e}")
         raise
@@ -131,7 +131,7 @@ async def query_ai_async(prompt: str, session_id: str) -> Dict[str, Any]:
     """Make async API call to AI model"""
     async with aiohttp.ClientSession() as session:
         payload = {
-            "model": "gemma3:12b",
+            "model": "gemma3:latest",
             "prompt": prompt,
             "stream": False,
             "options": {
@@ -140,7 +140,7 @@ async def query_ai_async(prompt: str, session_id: str) -> Dict[str, Any]:
                 "max_tokens": 500
             }
         }
-        
+
         try:
             async with session.post(API_URL, json=payload, timeout=30) as response:
                 if response.status == 200:
@@ -210,13 +210,13 @@ async def save_audio_segment(audio_bytes: bytes, sample_rate: int, session_id: s
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"{session_id}_{timestamp}.wav"
     filepath = os.path.join(OUTPUT_DIR, filename)
-    
+
     with wave.open(filepath, 'wb') as wf:
         wf.setnchannels(1)
         wf.setsampwidth(2)
         wf.setframerate(sample_rate)
         wf.writeframes(audio_bytes)
-    
+
     logger.info(f"Audio saved: {filename} for session {session_id}")
     return filepath
 
@@ -225,16 +225,16 @@ async def transcribe_audio(filepath: str, session_id: str) -> str:
     try:
         if MODEL is None:
             raise ValueError("ASR model not loaded")
-        
+
         text = MODEL.recognize(filepath)
         logger.info(f"Transcription for session {session_id}: {text[:50]}...")
-        
+
         # Clean up file
         try:
             os.remove(filepath)
         except OSError as e:
             logger.warning(f"Could not delete {filepath}: {e}")
-        
+
         return text.strip()
     except Exception as e:
         logger.error(f"Transcription failed for session {session_id}: {e}")
@@ -251,21 +251,28 @@ async def process_transcription(text: str, session_id: str, websocket) -> Dict[s
             "session_id": session_id,
             "timestamp": time.time()
         }))
-        
+
         # Create enhanced prompt
         prompt = PROMPT_TEMPLATE.format(text=text)
-        
+
         # Async AI query
         ai_result = await query_ai_async(prompt, session_id)
-        
+
+        await websocket.send(json.dumps({
+            "type": "API RESPONSE",
+            "message": ai_result,
+            "session_id": session_id,
+            "timestamp": time.time()
+        }))
+
         if not ai_result['success']:
             raise ValueError(ai_result.get('error', 'AI query failed'))
-        
+
         # Clean and parse JSON
         ai_response = ai_result['response']
         cleaned = re.sub(r'[^\x20-\x7E\n\r\t]+', '', ai_response)
         clean_str = cleaned.replace("```json", "").replace("```", "").strip()
-        
+
         # Try to repair JSON
         try:
             repaired_json = repair_json(clean_str)
@@ -277,13 +284,13 @@ async def process_transcription(text: str, session_id: str, websocket) -> Dict[s
                 data = json.loads(json_match.group())
             else:
                 raise ValueError("Could not parse JSON from AI response")
-        
+
         # Validate required fields
         required_fields = ['intent', 'context', 'action', 'text']
         for field in required_fields:
             if field not in data:
                 data[field] = ""
-        
+
         # Process with notes manager
         if data["intent"] in ["take_notes", "manage_tasks", "update_info"]:
             text_content = data["text"]
@@ -291,7 +298,21 @@ async def process_transcription(text: str, session_id: str, websocket) -> Dict[s
                 formatted_text = "\n".join(f"- {item.strip()}" for item in text_content)
             else:
                 formatted_text = str(text_content).strip()
-            
+
+            await websocket.send(json.dumps({
+            "type": "FORMATTED TEXT",
+            "message": formatted_text,
+            "session_id": session_id,
+            "timestamp": time.time()
+            }))
+
+            await websocket.send(json.dumps({
+            "type": "DATA",
+            "message": data,
+            "session_id": session_id,
+            "timestamp": time.time()
+            }))
+
             # Async notes processing
             result = await asyncio.to_thread(
                 notes_manager.process_instruction,
@@ -300,11 +321,11 @@ async def process_transcription(text: str, session_id: str, websocket) -> Dict[s
                 formatted_text,
                 data.get("metadata", {})
             )
-            
+
             data["notes_result"] = result
-        
+
         return data
-        
+
     except Exception as e:
         logger.error(f"Processing failed for session {session_id}: {e}")
         return {
@@ -322,7 +343,7 @@ async def generate_feedback(processed_data: Dict[str, Any], session_id: str) -> 
     intent = processed_data.get("intent", "")
     context = processed_data.get("context", "")
     action = processed_data.get("action", "")
-    
+
     feedback_templates = {
         "take_notes": "✅ Notes added to '{context}' category with {action} action.",
         "manage_tasks": "✅ Tasks updated in '{context}' list.",
@@ -332,19 +353,19 @@ async def generate_feedback(processed_data: Dict[str, Any], session_id: str) -> 
         "search_notes": "🔍 Search completed in '{context}' category.",
         "categorize": "🏷️  Content categorized under '{context}'."
     }
-    
+
     default_feedback = "✅ Action completed successfully."
-    
+
     feedback = feedback_templates.get(intent, default_feedback).format(
         context=context,
         action=action
     )
-    
+
     # Add confidence indicator
     confidence = processed_data.get("confidence", 0)
     if confidence < 0.7:
         feedback += " (Low confidence - please verify)"
-    
+
     return feedback
 
 # === Session Management ===
@@ -372,9 +393,9 @@ async def audio_handler_silerovad(websocket):
         logger.error("VAD model not loaded")
         await websocket.close()
         return
-    
+
     session = create_session(websocket)
-    
+
     try:
         logger.info(f"Client connected via WebSocket. Session: {session.session_id}")
         await websocket.send(json.dumps({
@@ -382,27 +403,27 @@ async def audio_handler_silerovad(websocket):
             "session_id": session.session_id,
             "message": "Ready to receive audio"
         }))
-        
+
         async for message in websocket:
             session.last_activity = time.time()
-            
+
             if len(message) % CHUNK_SIZE != 0:
                 logger.warning(f"Invalid chunk size: {len(message)}")
                 continue
-            
+
             for i in range(0, len(message), CHUNK_SIZE):
                 frame_bytes = message[i:i + CHUNK_SIZE]
-                
+
                 # Convert to tensor for VAD
                 audio_np = np.frombuffer(frame_bytes, dtype=np.int16).astype(np.float32) / 32768.0
                 audio_tensor = torch.from_numpy(audio_np)
-                
+
                 # VAD inference
                 with torch.no_grad():
                     speech_prob = VAD_MODEL(audio_tensor, SAMPLE_RATE).item()
-                
+
                 is_speech = speech_prob > VAD_THRESHOLD
-                
+
                 # VAD state machine
                 if is_speech:
                     if not session.is_speaking:
@@ -415,15 +436,20 @@ async def audio_handler_silerovad(websocket):
                     if session.is_speaking:
                         session.silent_frame_count += 1
                         session.audio_buffer.extend(frame_bytes)
-                        
+
                         if session.silent_frame_count >= PAUSE_THRESHOLD_FRAMES:
                             logger.info(f"Pause detected in session {session.session_id}")
                             session.is_speaking = False
-                            
+
                             if session.speech_frame_count >= MIN_SPEECH_FRAMES:
+                                await websocket.send(json.dumps({
+                                    "type": "TRANSCRIPTION_STARTED",
+                                    "session_id": session.session_id,
+                                    "message": "Transcription started"
+                                }))
                                 # Process the audio segment
                                 audio_bytes = bytes(session.audio_buffer)
-                                
+
                                 # Save and transcribe
                                 filepath = await save_audio_segment(
                                     audio_bytes, SAMPLE_RATE, session.session_id
@@ -431,11 +457,16 @@ async def audio_handler_silerovad(websocket):
                                 transcription = await transcribe_audio(
                                     filepath, session.session_id
                                 )
-                                
+
                                 if transcription:
                                     # Store transcription
                                     session.transcriptions.append(transcription)
-                                    
+
+                                    await websocket.send(json.dumps({
+                                    "type": "TRANSCRIPTION_COMPLETED",
+                                    "session_id": session.session_id,
+                                    "message": "Transcription started"
+                                    }))
                                     # Send transcription to client
                                     await websocket.send(json.dumps({
                                         "type": "TRANSCRIPTION",
@@ -443,7 +474,7 @@ async def audio_handler_silerovad(websocket):
                                         "session_id": session.session_id,
                                         "timestamp": time.time()
                                     }))
-                                    
+
                                     # Check for command phrases
                                     command_phrases = [
                                         "confirm and submit",
@@ -451,22 +482,37 @@ async def audio_handler_silerovad(websocket):
                                         "save that",
                                         "add to notes"
                                     ]
-                                    
-                                    if any(phrase in transcription.lower() for phrase in command_phrases):
+
+                                    #if any(phrase in transcription.lower() for phrase in command_phrases):
+                                    if any(
+                                        phrase in t.lower()
+                                        for t in session.transcriptions
+                                        for phrase in command_phrases
+                                    ):
                                         # Combine recent transcriptions
                                         recent_text = " ".join(session.transcriptions[-3:])
-                                        
+
+                                        await websocket.send(json.dumps({
+                                            "type": "PROCESSING_STARTED",
+                                            "session_id": session.session_id,
+                                            "message": "Transcription started"
+                                        }))
                                         # Start async processing
                                         session.processing_task = asyncio.create_task(
                                             process_and_feedback(recent_text, session.session_id, websocket)
                                         )
+                                        await websocket.send(json.dumps({
+                                            "type": "PROCESSING_COMPLETED",
+                                            "session_id": session.session_id,
+                                            "message": "Transcription started"
+                                        }))
                                         session.transcriptions.clear()
-                                
+
                             # Reset buffer
                             session.audio_buffer = bytearray()
                             session.silent_frame_count = 0
                             session.speech_frame_count = 0
-    
+
     except websockets.exceptions.ConnectionClosedOK:
         logger.info(f"Client disconnected normally. Session: {session.session_id}")
     except Exception as e:
@@ -481,13 +527,13 @@ async def process_and_feedback(text: str, session_id: str, websocket):
     try:
         # Process transcription
         processed_data = await process_transcription(text, session_id, websocket)
-        
+
         # Generate feedback
         feedback = await generate_feedback(processed_data, session_id)
-        
+
         # Send comprehensive feedback
         await websocket.send(json.dumps({
-            "type": "FEEDBACK",
+            "type": "VOICE_FEEDBACK",
             "message": feedback,
             "details": {
                 "intent": processed_data.get("intent"),

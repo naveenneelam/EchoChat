@@ -103,19 +103,31 @@ function App() {
       // Parse JSON messages
       const data = JSON.parse(rawData);
 
-      switch (data.type) {
+      // Normalize type to uppercase to avoid case sensitivity issues
+      // e.g. 'transcription_started' -> 'TRANSCRIPTION_STARTED'
+      const msgType = (data.type || '').toUpperCase();
+
+      console.log("WS Message:", msgType, data);
+
+      switch (msgType) {
         case 'CONNECTED':
-          console.log("Server Handshake Received:", data);
+        case 'CONNECTION_ESTABLISHED':
           setStatus(ConnectionStatus.CONNECTED);
           setProcessStatus('idle');
           break;
 
+        // Start of speech / VAD trigger
         case 'TRANSCRIPTION_STARTED':
+        case 'SPEECH_START':
+        case 'VAD_START':
+        case 'LISTENING':
           setProcessStatus('transcribing');
           break;
 
+        // User speech converted to text
         case 'TRANSCRIPTION_COMPLETED':
-        case 'TRANSCRIPTION': // Fallback for legacy backend
+        case 'TRANSCRIPTION':
+        case 'USER_TRANSCRIPT':
           const userText = data.text?.trim();
           if (userText) {
             setTranscripts(prev => [...prev, {
@@ -126,17 +138,24 @@ function App() {
               isFinal: true
             }]);
           }
-          // Reset to idle, or wait for processing started if backend sends it immediately
+          // After transcription, we go to idle, unless processing started comes immediately.
+          // Note: If we switched to processing here speculatively, it might flicker if the server doesn't respond.
+          // We'll stick to 'idle' but ensure the UI handles rapid transitions well.
           setProcessStatus('idle');
           break;
 
+        // LLM / AI processing start
         case 'PROCESSING_STARTED':
+        case 'PROCESSING_START':
+        case 'THINKING':
           setProcessStatus('processing');
           break;
 
+        // LLM / AI response
         case 'PROCESSING_COMPLETED':
-        case 'SYSTEM_RESPONSE': // Fallback
-        case 'VOICE_FEEDBACK': // Fallback
+        case 'SYSTEM_RESPONSE':
+        case 'VOICE_FEEDBACK':
+        case 'AI_RESPONSE':
           const systemText = (data.text || data.message || '').trim();
           if (systemText) {
             speak(systemText);
@@ -152,15 +171,16 @@ function App() {
           break;
 
         default:
-          console.log("Received unknown message type:", data.type);
+          console.log("Received unhandled message type:", msgType);
           break;
       }
 
     } catch (e) {
       // --- Fallback: Legacy Plain Text Protocol ---
       if (typeof rawData === 'string') {
-        if (rawData.startsWith('VOICE FEEDBACK:')) {
-          const text = rawData.replace('VOICE FEEDBACK:', '').trim();
+        const textData = rawData.trim();
+        if (textData.startsWith('VOICE FEEDBACK:')) {
+          const text = textData.replace('VOICE FEEDBACK:', '').trim();
           speak(text);
           setTranscripts(prev => [...prev, {
             id: Date.now().toString(),
@@ -170,8 +190,8 @@ function App() {
             isFinal: true
           }]);
           setProcessStatus('idle');
-        } else if (rawData.startsWith('TRANSCRIPTION:')) {
-          const text = rawData.replace('TRANSCRIPTION:', '').trim();
+        } else if (textData.startsWith('TRANSCRIPTION:')) {
+          const text = textData.replace('TRANSCRIPTION:', '').trim();
           setTranscripts(prev => [...prev, {
             id: Date.now().toString(),
             text: text,
@@ -180,6 +200,10 @@ function App() {
             isFinal: true
           }]);
           setProcessStatus('idle');
+        } else if (textData.includes('started')) {
+           // Heuristic for plain text status messages if any
+           if (textData.toLowerCase().includes('transcription')) setProcessStatus('transcribing');
+           if (textData.toLowerCase().includes('processing')) setProcessStatus('processing');
         }
       }
     }
@@ -518,9 +542,9 @@ function App() {
             <h2 className="font-semibold">Live Transcript</h2>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50/50 dark:bg-dark-950/50">
+          <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50/50 dark:bg-dark-950/50 relative">
             {transcripts.length === 0 && processStatus === 'idle' && (
-              <div className="h-full flex flex-col items-center justify-center text-gray-400 dark:text-gray-600 opacity-60">
+              <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-400 dark:text-gray-600 opacity-60">
                 <p>No speech detected yet.</p>
               </div>
             )}
