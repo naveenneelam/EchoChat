@@ -69,21 +69,21 @@ const Visualizer: React.FC<VisualizerProps> = ({ isRecording, analyser, vadActiv
         ctx.lineWidth = 2;
         ctx.stroke();
 
-        const barCount = 60;
+        const barCount = 64;
         const angleStep = (2 * Math.PI) / barCount;
-        
+
         // Use lower half of frequency data (more active for speech)
-        const availableData = dataArray.length / 2; 
+        const availableData = dataArray.length / 1.5;
         const dataStep = Math.max(1, Math.floor(availableData / barCount));
 
         for (let i = 0; i < barCount; i++) {
           const dataIndex = Math.floor(i * dataStep);
           const value = dataArray[dataIndex] || 0;
           const percent = value / 255;
-          const barHeight = percent * (radius * 0.8);
-          
+          const barHeight = percent * (radius * 1.0);
+
           const angle = i * angleStep;
-          
+
           const startX = centerX + Math.cos(angle) * radius;
           const startY = centerY + Math.sin(angle) * radius;
           const endX = centerX + Math.cos(angle) * (radius + barHeight);
@@ -92,7 +92,16 @@ const Visualizer: React.FC<VisualizerProps> = ({ isRecording, analyser, vadActiv
           ctx.beginPath();
           ctx.moveTo(startX, startY);
           ctx.lineTo(endX, endY);
-          ctx.strokeStyle = vadActive ? `rgba(14, 165, 233, ${0.5 + percent})` : `rgba(156, 163, 175, ${0.2 + percent})`;
+
+          if (vadActive) {
+            // Multicolor: HSL sweep based on angle/index
+            // Start at Cyan (180) go to Pink/Red (360) for a vibrant look
+            const hue = 180 + (i / barCount) * 180;
+            ctx.strokeStyle = `hsla(${hue}, 90%, 60%, ${0.5 + percent})`;
+          } else {
+            ctx.strokeStyle = `rgba(156, 163, 175, ${0.2 + percent})`;
+          }
+
           ctx.lineWidth = 3;
           ctx.lineCap = 'round';
           ctx.stroke();
@@ -102,32 +111,50 @@ const Visualizer: React.FC<VisualizerProps> = ({ isRecording, analyser, vadActiv
         if (vadActive) {
             ctx.beginPath();
             ctx.arc(centerX, centerY, radius * 0.9, 0, 2 * Math.PI);
-            ctx.fillStyle = 'rgba(14, 165, 233, 0.1)';
+
+            // Colorful radial gradient fill
+            const gradient = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, radius);
+            gradient.addColorStop(0, 'rgba(14, 165, 233, 0.2)'); // Blue center
+            gradient.addColorStop(1, 'rgba(236, 72, 153, 0.1)'); // Pink edge
+
+            ctx.fillStyle = gradient;
             ctx.fill();
         }
 
       } else {
         // --- WAVEFORM MODE ---
-        
+
         // Dynamic Animation Variables
         const time = Date.now() / 1000;
         const pulseSpeed = vadActive ? 8 : 2; // Faster pulse when active
         const pulse = (Math.sin(time * pulseSpeed) + 1) / 2; // Oscillate 0..1
 
         // Styling based on VAD
-        const baseColor = vadActive ? '14, 165, 233' : '75, 85, 99'; // Sky-500 vs Gray-600
-        const opacity = vadActive ? 0.8 + (pulse * 0.2) : 0.5;
+        if (vadActive) {
+            const gradient = ctx.createLinearGradient(0, 0, width, 0);
+            gradient.addColorStop(0, '#ef4444'); // Red
+            gradient.addColorStop(0.15, '#f97316'); // Orange
+            gradient.addColorStop(0.3, '#eab308'); // Yellow
+            gradient.addColorStop(0.5, '#22c55e'); // Green
+            gradient.addColorStop(0.65, '#0ea5e9'); // Blue
+            gradient.addColorStop(0.8, '#a855f7'); // Purple
+            gradient.addColorStop(1, '#ec4899'); // Pink
+
+            ctx.strokeStyle = gradient;
+        } else {
+             ctx.strokeStyle = `rgba(75, 85, 99, 0.5)`;
+        }
+
         const lineWidth = vadActive ? 3 + (pulse * 1.5) : 2; // Thicker when active
-        
+
         ctx.lineWidth = lineWidth;
-        ctx.strokeStyle = `rgba(${baseColor}, ${opacity})`;
         ctx.lineJoin = 'round';
         ctx.lineCap = 'round';
-        
+
         // Add Glow
         if (vadActive) {
-            ctx.shadowBlur = 10 + (pulse * 10);
-            ctx.shadowColor = `rgba(${baseColor}, 0.6)`;
+            ctx.shadowBlur = 15 + (pulse * 5);
+            ctx.shadowColor = `rgba(236, 72, 153, 0.5)`; // Pinkish glow to match end of spectrum
         } else {
             ctx.shadowBlur = 0;
         }
@@ -152,7 +179,7 @@ const Visualizer: React.FC<VisualizerProps> = ({ isRecording, analyser, vadActiv
 
         ctx.lineTo(width, height / 2);
         ctx.stroke();
-        
+
         // Reset Shadow for next frame
         ctx.shadowBlur = 0;
       }
@@ -170,10 +197,10 @@ const Visualizer: React.FC<VisualizerProps> = ({ isRecording, analyser, vadActiv
   }, [isRecording, analyser, vadActive, mode]);
 
   return (
-    <canvas 
-      ref={canvasRef} 
-      width={600} 
-      height={400} 
+    <canvas
+      ref={canvasRef}
+      width={600}
+      height={400}
       className="w-full max-w-[400px] h-auto aspect-square mx-auto transition-all duration-300"
     />
   );
