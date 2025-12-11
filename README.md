@@ -1,4 +1,4 @@
-# <img width="1024" height="1024" alt="ChatGPT Image Dec 11, 2025, 08_17_15 PM" src="https://github.com/user-attachments/assets/9dd5a0a4-82a8-41ae-b38b-66db74e608fe" />
+# <img width="50" height="50" alt="ChatGPT Image Dec 11, 2025, 08_17_15 PM" src="https://github.com/user-attachments/assets/9dd5a0a4-82a8-41ae-b38b-66db74e608fe" />
 **EchoChat**
 
 **EchoChat** is a fully containerized, real-time **voice-driven note-taking and AI interaction system**.
