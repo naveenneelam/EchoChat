@@ -45,6 +45,10 @@ EchoChat allows users to capture audio through the microphone, view live multi-c
 
 * Low-latency interaction between React frontend and Python backend.
 * Streams audio → processes → returns partial + final transcripts.
+### 🔌 **ScreenShots**
+<img width="720" height="624" alt="image" src="https://github.com/user-attachments/assets/f048cd70-90a9-46a1-be9c-0e35a98c4b19" />
+<img width="720" height="618" alt="image" src="https://github.com/user-attachments/assets/af8b3750-1d91-450c-9d71-6151e7acb2b8" />
+
 
 ### 🐳 **Docker Compose Deployment**
 
