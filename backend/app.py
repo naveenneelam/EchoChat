@@ -23,7 +23,7 @@ from collections import defaultdict
 import uuid
 
 # === Configuration ===
-API_URL = "http://localhost:11434/api/generate"
+API_URL = "http://103.102.234.6:11434/api/generate"
 OUTPUT_DIR = "output_files"
 CACHE_DIR = "cache"
 LOG_DIR = "logs"
@@ -318,12 +318,15 @@ async def process_transcription(text: str, session_id: str, websocket) -> Dict[s
                 notes_manager.process_instruction,
                 data["context"],
                 data["action"],
-                formatted_text,
-                data.get("metadata", {})
+                formatted_text
             )
 
-            data["notes_result"] = result
-
+            await websocket.send(json.dumps({
+            "type": "NOTES MANAGER RESULT",
+            "message": result,
+            "session_id": session_id,
+            "timestamp": time.time()
+            }))
         return data
 
     except Exception as e:
@@ -490,22 +493,18 @@ async def audio_handler_silerovad(websocket):
                                         for phrase in command_phrases
                                     ):
                                         # Combine recent transcriptions
-                                        recent_text = " ".join(session.transcriptions[-3:])
+                                        recent_text = " ".join(session.transcriptions)
 
                                         await websocket.send(json.dumps({
                                             "type": "PROCESSING_STARTED",
                                             "session_id": session.session_id,
-                                            "message": "Transcription started"
+                                            "message": "Prcessing started"
                                         }))
                                         # Start async processing
                                         session.processing_task = asyncio.create_task(
                                             process_and_feedback(recent_text, session.session_id, websocket)
                                         )
-                                        await websocket.send(json.dumps({
-                                            "type": "PROCESSING_COMPLETED",
-                                            "session_id": session.session_id,
-                                            "message": "Transcription started"
-                                        }))
+
                                         session.transcriptions.clear()
 
                             # Reset buffer
@@ -545,7 +544,12 @@ async def process_and_feedback(text: str, session_id: str, websocket):
             "timestamp": time.time(),
             "success": True
         }))
-        
+
+        await websocket.send(json.dumps({
+                "type": "PROCESSING_COMPLETED",
+                "session_id": session.session_id,
+                "message": "Prcessing completed"
+            }))
         logger.info(f"Processing completed for session {session_id}: {feedback}")
         
     except Exception as e:

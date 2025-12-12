@@ -12,7 +12,9 @@ import {
   AlertCircle,
   Waves,
   BarChart2,
-  Loader2
+  Loader2,
+  Sparkles,
+  AudioLines
 } from 'lucide-react';
 import Visualizer from './components/Visualizer';
 import SettingsModal from './components/SettingsModal';
@@ -22,7 +24,7 @@ import { floatTo16BitPCM, calculateRMS, downsampleBuffer } from './utils/audioUt
 // Helper to determine default protocol
 // Defaulting to ws:// as requested for local insecure dev environments
 const getInitialUrl = () => {
-  const defaultAddr = '103.102.234.6:8765';
+  const defaultAddr = 'localhost:8765';
   return `ws://${defaultAddr}`;
 };
 
@@ -139,8 +141,6 @@ function App() {
             }]);
           }
           // After transcription, we go to idle, unless processing started comes immediately.
-          // Note: If we switched to processing here speculatively, it might flicker if the server doesn't respond.
-          // We'll stick to 'idle' but ensure the UI handles rapid transitions well.
           setProcessStatus('idle');
           break;
 
@@ -158,7 +158,9 @@ function App() {
         case 'AI_RESPONSE':
           const systemText = (data.text || data.message || '').trim();
           if (systemText) {
+            stopRecording();
             speak(systemText);
+            startRecording();
             setTranscripts(prev => [...prev, {
               id: Date.now().toString(),
               text: systemText,
@@ -181,7 +183,9 @@ function App() {
         const textData = rawData.trim();
         if (textData.startsWith('VOICE FEEDBACK:')) {
           const text = textData.replace('VOICE FEEDBACK:', '').trim();
-          speak(text);
+            stopRecording();
+            speak(text);
+            startRecording();
           setTranscripts(prev => [...prev, {
             id: Date.now().toString(),
             text: text,
@@ -402,26 +406,28 @@ function App() {
 
   // Scroll to bottom of transcript
   useEffect(() => {
-    transcriptsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    // Use 'nearest' to prevent the viewport from jumping around on mobile
+    transcriptsEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }, [transcripts, processStatus]);
 
   return (
-    <div className={`min-h-screen flex flex-col ${theme === 'dark' ? 'bg-dark-950 text-white' : 'bg-gray-50 text-gray-900'}`}>
+    // Outer container: Fixed viewport height to prevent whole-page scrolling
+    <div className={`h-[100dvh] flex flex-col ${theme === 'dark' ? 'bg-dark-950 text-white' : 'bg-gray-50 text-gray-900'} overflow-hidden`}>
 
-      {/* HEADER */}
-      <header className="px-6 py-4 flex items-center justify-between border-b border-gray-200 dark:border-dark-800 bg-white/50 dark:bg-dark-900/50 backdrop-blur-md sticky top-0 z-10">
-        <div className="flex items-center gap-3">
-          <div className="p-2 bg-primary-600 rounded-lg">
-            <Activity className="text-white w-6 h-6" />
+      {/* HEADER - Fixed Height */}
+      <header className="flex-none px-4 py-3 md:px-6 md:py-4 flex items-center justify-between border-b border-gray-200 dark:border-dark-800 bg-white/50 dark:bg-dark-900/50 backdrop-blur-md z-20">
+        <div className="flex items-center gap-2 md:gap-3">
+          <div className="p-1.5 md:p-2 bg-primary-600 rounded-lg">
+            <Activity className="text-white w-5 h-5 md:w-6 md:h-6" />
           </div>
           <div>
-            <h1 className="font-bold text-lg leading-tight">VAD & Whisper</h1>
-            <p className="text-xs text-gray-500 dark:text-gray-400">Real-time ASR Stream</p>
+            <h1 className="font-bold text-base md:text-lg leading-tight">VAD & Whisper</h1>
+            <p className="hidden md:block text-xs text-gray-500 dark:text-gray-400">Real-time ASR Stream</p>
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium border ${
+        <div className="flex items-center gap-2 md:gap-3">
+          <div className={`flex items-center gap-2 px-2 py-1 md:px-3 rounded-full text-[10px] md:text-xs font-medium border ${
             status === ConnectionStatus.CONNECTED
               ? 'bg-green-100 text-green-700 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800'
               : status === ConnectionStatus.CONNECTING
@@ -430,121 +436,74 @@ function App() {
               ? 'bg-red-100 text-red-700 border-red-200 dark:bg-red-900/30 dark:text-red-400 dark:border-red-800'
               : 'bg-gray-100 text-gray-600 border-gray-200 dark:bg-dark-800 dark:text-gray-400 dark:border-dark-700'
           }`}>
-            {status === ConnectionStatus.CONNECTED ? <Wifi size={14}/> : <WifiOff size={14}/>}
-            <span className="uppercase tracking-wider">{status}</span>
+            {status === ConnectionStatus.CONNECTED ? <Wifi size={12}/> : <WifiOff size={12}/>}
+            <span className="uppercase tracking-wider hidden sm:inline">{status}</span>
           </div>
 
           <button
             onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-            className="p-2 rounded-lg hover:bg-gray-200 dark:hover:bg-dark-800 transition-colors"
+            className="p-1.5 md:p-2 rounded-lg hover:bg-gray-200 dark:hover:bg-dark-800 transition-colors"
           >
-            {theme === 'dark' ? <Sun size={20} /> : <Moon size={20} />}
+            {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
           </button>
         </div>
       </header>
 
-      {/* MAIN CONTENT */}
-      <main className="flex-1 max-w-5xl w-full mx-auto p-4 md:p-6 grid grid-cols-1 md:grid-cols-2 gap-6">
+      {/* MAIN CONTENT - Mobile Sandwich Layout / Desktop Grid Layout */}
+      <main className="flex-1 min-h-0 w-full max-w-7xl mx-auto p-3 md:p-6 grid grid-cols-1 md:grid-cols-2 grid-rows-[auto_1fr_auto] md:grid-rows-[1fr_auto] gap-3 md:gap-6">
 
-        {/* LEFT COLUMN: Visuals & Controls */}
-        <div className="flex flex-col gap-6">
-
-          {/* Visualizer Card */}
-          <div className="flex-1 bg-white dark:bg-dark-900 rounded-2xl p-8 shadow-sm border border-gray-200 dark:border-dark-800 flex flex-col items-center justify-center relative overflow-hidden group">
+        {/*
+           VISUALIZER PANEL
+           Mobile: Order 1 (Top). Fixed Height (~140px).
+           Desktop: Col 1, Row 1 (Left Top). Expands.
+        */}
+        <div className="order-1 md:order-none md:col-start-1 md:row-start-1 bg-white dark:bg-dark-900 rounded-2xl p-2 md:p-4 shadow-sm border border-gray-200 dark:border-dark-800 flex flex-col items-center justify-center relative overflow-hidden h-36 md:h-auto shrink-0 group">
              {/* Info overlay */}
-            <div className="absolute top-4 left-4 z-10">
-              <span className={`text-xs font-mono px-2 py-1 rounded ${vadActive ? 'bg-primary-500 text-white' : 'bg-gray-200 dark:bg-dark-800 text-gray-500'}`}>
-                {vadActive ? 'VAD ACTIVE' : 'SILENCE'}
+            <div className="absolute top-3 left-3 z-10">
+              <span className={`text-[10px] md:text-xs font-mono px-2 py-0.5 rounded ${vadActive ? 'bg-primary-500 text-white' : 'bg-gray-200 dark:bg-dark-800 text-gray-500'}`}>
+                {vadActive ? 'VAD' : 'SILENCE'}
               </span>
             </div>
 
-            {/* Viz Toggle */}
-            <div className="absolute top-4 right-4 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
+            <div className="absolute top-3 right-3 z-10 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
                 <button
                     onClick={toggleVizMode}
-                    className="p-2 rounded-lg bg-gray-100 dark:bg-dark-800 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-dark-700 transition-colors"
-                    title={`Switch to ${vizMode === 'frequency' ? 'Waveform' : 'Frequency'} view`}
+                    className="p-1.5 md:p-2 rounded-lg bg-gray-100 dark:bg-dark-800 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-dark-700 transition-colors"
                 >
-                    {vizMode === 'frequency' ? <Waves size={16} /> : <BarChart2 size={16} />}
+                    {vizMode === 'frequency' ? <Waves size={14} /> : <BarChart2 size={14} />}
                 </button>
             </div>
 
-            <Visualizer
-              isRecording={status === ConnectionStatus.CONNECTED}
-              analyser={analyserRef.current}
-              vadActive={vadActive}
-              mode={vizMode}
-            />
+            <div className="w-full h-full flex items-center justify-center">
+                <Visualizer
+                isRecording={status === ConnectionStatus.CONNECTED}
+                analyser={analyserRef.current}
+                vadActive={vadActive}
+                mode={vizMode}
+                />
+            </div>
 
-            <p className="mt-6 text-center text-sm text-gray-500 dark:text-gray-400 max-w-xs">
+            <p className="hidden md:block mt-6 text-center text-sm text-gray-500 dark:text-gray-400 max-w-xs">
               {status === ConnectionStatus.CONNECTED
-                ? "Listening... Speak now. Pausing will trigger processing."
-                : "Ready to connect. Ensure your Python backend is running."}
+                ? "Listening... Speak now."
+                : "Ready to connect."}
             </p>
-          </div>
-
-          {/* Controls */}
-          <div className="flex flex-col gap-4">
-             {/* Error Message Box */}
-            {status === ConnectionStatus.ERROR && errorMessage && (
-                <div className="p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl flex items-start gap-3 animate-in fade-in slide-in-from-top-2">
-                    <div className="p-1 bg-red-100 dark:bg-red-800/50 rounded-full text-red-600 dark:text-red-200 shrink-0">
-                        <AlertCircle size={18} />
-                    </div>
-                    <div>
-                        <h3 className="text-sm font-semibold text-red-800 dark:text-red-200">Connection Failed</h3>
-                        <p className="text-xs text-red-600 dark:text-red-300 mt-1 leading-relaxed">
-                            {errorMessage}
-                        </p>
-                    </div>
-                </div>
-            )}
-
-            <div className="bg-white dark:bg-dark-900 rounded-2xl p-6 shadow-sm border border-gray-200 dark:border-dark-800 flex items-center justify-between">
-                <button
-                onClick={() => setIsSettingsOpen(true)}
-                className="p-3 text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-dark-800 rounded-xl transition-all"
-                disabled={status === ConnectionStatus.CONNECTED}
-                >
-                <Settings size={24} />
-                </button>
-
-                <button
-                onClick={toggleRecording}
-                className={`relative group px-8 py-4 rounded-2xl flex items-center gap-3 font-bold text-lg transition-all transform active:scale-95 shadow-lg ${
-                    status === ConnectionStatus.CONNECTED
-                    ? 'bg-red-500 hover:bg-red-600 text-white shadow-red-500/30'
-                    : 'bg-primary-600 hover:bg-primary-500 text-white shadow-primary-500/30'
-                }`}
-                >
-                {status === ConnectionStatus.CONNECTED ? (
-                    <>
-                    <Square fill="currentColor" size={20} />
-                    <span>Stop</span>
-                    </>
-                ) : (
-                    <>
-                    <Mic fill="currentColor" size={20} />
-                    <span>Start Recording</span>
-                    </>
-                )}
-                </button>
-
-                <div className="w-12"></div> {/* Spacer for symmetry */}
-            </div>
-          </div>
         </div>
 
-        {/* RIGHT COLUMN: Transcript */}
-        <div className="bg-white dark:bg-dark-900 rounded-2xl shadow-sm border border-gray-200 dark:border-dark-800 flex flex-col overflow-hidden h-[500px] md:h-auto">
-          <div className="p-4 border-b border-gray-200 dark:border-dark-800 flex items-center gap-2">
+        {/*
+           TRANSCRIPT PANEL
+           Mobile: Order 2 (Middle). Fills remaining space. Scrolls internally.
+           Desktop: Col 2, Row Span 2 (Right Side Full).
+        */}
+        <div className="order-2 md:order-none md:col-start-2 md:row-span-2 flex-1 min-h-0 bg-white dark:bg-dark-900 rounded-2xl shadow-sm border border-gray-200 dark:border-dark-800 flex flex-col overflow-hidden relative">
+          <div className="p-3 md:p-4 border-b border-gray-200 dark:border-dark-800 flex items-center gap-2 flex-none bg-white/50 dark:bg-dark-900/50 backdrop-blur-sm z-10">
             <MessageSquare size={18} className="text-primary-500" />
-            <h2 className="font-semibold">Live Transcript</h2>
+            <h2 className="font-semibold text-sm md:text-base">Live Transcript</h2>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50/50 dark:bg-dark-950/50 relative">
+          <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50/50 dark:bg-dark-950/50 relative scroll-smooth overscroll-contain">
             {transcripts.length === 0 && processStatus === 'idle' && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-400 dark:text-gray-600 opacity-60">
+              <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-400 dark:text-gray-600 opacity-60 pointer-events-none">
                 <p>No speech detected yet.</p>
               </div>
             )}
@@ -554,7 +513,7 @@ function App() {
                 key={msg.id}
                 className={`flex w-full ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}
               >
-                <div className={`max-w-[80%] px-4 py-3 rounded-2xl shadow-sm ${
+                <div className={`max-w-[85%] md:max-w-[80%] px-4 py-3 rounded-2xl shadow-sm ${
                   msg.sender === 'user'
                     ? 'bg-primary-600 text-white rounded-tr-sm'
                     : 'bg-white dark:bg-dark-800 border border-gray-100 dark:border-dark-700 text-gray-800 dark:text-gray-100 rounded-tl-sm'
@@ -567,31 +526,84 @@ function App() {
               </div>
             ))}
 
-            {/* Visual Indicators for Process Status */}
             {processStatus === 'transcribing' && (
               <div className="flex w-full justify-end animate-in fade-in slide-in-from-bottom-2">
-                <div className="max-w-[80%] px-4 py-3 rounded-2xl rounded-tr-sm bg-primary-50 dark:bg-primary-900/20 text-primary-600 dark:text-primary-400 border border-primary-100 dark:border-primary-800/50 flex items-center gap-3">
-                   <div className="flex gap-1">
-                      <span className="w-1.5 h-1.5 bg-primary-500 dark:bg-primary-400 rounded-full animate-bounce [animation-delay:-0.3s]"></span>
-                      <span className="w-1.5 h-1.5 bg-primary-500 dark:bg-primary-400 rounded-full animate-bounce [animation-delay:-0.15s]"></span>
-                      <span className="w-1.5 h-1.5 bg-primary-500 dark:bg-primary-400 rounded-full animate-bounce"></span>
-                   </div>
-                   <span className="text-sm font-medium">Transcribing...</span>
+                <div className="max-w-[85%] md:max-w-[80%] px-4 py-3 rounded-2xl rounded-tr-sm bg-primary-600/90 text-white backdrop-blur-sm flex items-center gap-3 shadow-md border border-primary-500/20">
+                    <div className="p-1.5 bg-primary-500/30 rounded-full animate-pulse">
+                        <AudioLines size={18} className="text-white" />
+                    </div>
+                     <div className="flex items-center gap-1 h-3">
+                        <div className="w-1 h-3 bg-white/80 rounded-full animate-[bounce_1s_infinite_0ms]"></div>
+                        <div className="w-1 h-4 bg-white/80 rounded-full animate-[bounce_1s_infinite_200ms]"></div>
+                        <div className="w-1 h-2 bg-white/80 rounded-full animate-[bounce_1s_infinite_400ms]"></div>
+                     </div>
                 </div>
               </div>
             )}
 
             {processStatus === 'processing' && (
               <div className="flex w-full justify-start animate-in fade-in slide-in-from-bottom-2">
-                <div className="max-w-[80%] px-4 py-3 rounded-2xl rounded-tl-sm bg-gray-100 dark:bg-dark-800 text-gray-500 dark:text-gray-400 flex items-center gap-2">
-                   <Loader2 className="w-4 h-4 animate-spin" />
-                   <span className="text-sm font-medium">AI Thinking...</span>
+                <div className="max-w-[85%] md:max-w-[80%] px-4 py-3 rounded-2xl rounded-tl-sm bg-white dark:bg-dark-800 border border-gray-100 dark:border-dark-700 text-gray-800 dark:text-gray-100 shadow-sm flex items-center gap-3">
+                   <div className="p-1.5 bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 rounded-lg">
+                      <Sparkles size={16} className="animate-pulse" />
+                   </div>
+                   <div className="flex gap-1">
+                      <span className="w-1.5 h-1.5 bg-gray-400 dark:bg-gray-500 rounded-full animate-bounce [animation-delay:-0.3s]"></span>
+                      <span className="w-1.5 h-1.5 bg-gray-400 dark:bg-gray-500 rounded-full animate-bounce [animation-delay:-0.15s]"></span>
+                      <span className="w-1.5 h-1.5 bg-gray-400 dark:bg-gray-500 rounded-full animate-bounce"></span>
+                   </div>
                 </div>
               </div>
             )}
 
             <div ref={transcriptsEndRef} />
           </div>
+        </div>
+
+        {/*
+           CONTROLS PANEL
+           Mobile: Order 3 (Bottom). Fixed Height.
+           Desktop: Col 1, Row 2 (Left Bottom).
+        */}
+        <div className="order-3 md:order-none md:col-start-1 md:row-start-2 bg-white dark:bg-dark-900 rounded-2xl p-4 md:p-6 shadow-sm border border-gray-200 dark:border-dark-800 flex items-center justify-between shrink-0 z-20">
+             {/* Error Message if any (absolute positioned to appear above buttons) */}
+             {status === ConnectionStatus.ERROR && errorMessage && (
+                <div className="absolute bottom-full left-0 right-0 mb-2 mx-4 p-3 bg-red-50 dark:bg-red-900/90 border border-red-200 dark:border-red-800 rounded-xl flex items-center gap-3 backdrop-blur-md shadow-lg animate-in fade-in slide-in-from-bottom-2 z-30">
+                    <AlertCircle size={16} className="text-red-600 dark:text-red-200 shrink-0" />
+                    <p className="text-xs text-red-600 dark:text-red-200 line-clamp-2">{errorMessage}</p>
+                </div>
+            )}
+
+            <button
+              onClick={() => setIsSettingsOpen(true)}
+              className="p-3 text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-dark-800 rounded-xl transition-all"
+              disabled={status === ConnectionStatus.CONNECTED}
+            >
+              <Settings size={22} />
+            </button>
+
+            <button
+              onClick={toggleRecording}
+              className={`flex-1 mx-4 relative group py-3 md:py-4 rounded-xl flex items-center justify-center gap-3 font-bold text-base md:text-lg transition-all transform active:scale-95 shadow-lg ${
+                status === ConnectionStatus.CONNECTED
+                  ? 'bg-red-500 hover:bg-red-600 text-white shadow-red-500/30'
+                  : 'bg-primary-600 hover:bg-primary-500 text-white shadow-primary-500/30'
+              }`}
+            >
+              {status === ConnectionStatus.CONNECTED ? (
+                <>
+                  <Square fill="currentColor" size={18} />
+                  <span>Stop</span>
+                </>
+              ) : (
+                <>
+                  <Mic fill="currentColor" size={18} />
+                  <span>Start</span>
+                </>
+              )}
+            </button>
+
+            <div className="w-11"></div> {/* Spacer for symmetry with settings button */}
         </div>
 
       </main>
